@@ -1,0 +1,113 @@
+name: Build macOS
+
+# Produces a macOS Apple Silicon desktop build (DMG + ZIP).
+#
+# The repository ships no CI, so this workflow stages everything a macOS
+# package needs: the Prism fingerprint Chromium kernel, the darwin Xray core,
+# and the Electron bundle. It can run unsigned (for testing) or signed and
+# notarized (when the Apple secrets are configured).
+#
+# Note: the pinned kernel release lives under the upstream `DFarm6` repository,
+# while this fork is `joy1668`. If the default download 404s, pass a
+# `kernel_archive_url` pointing at a reachable copy of the Prism kernel DMG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_archive_url:
+        description: Optional URL of a Prism macOS kernel DMG (overrides the pinned release)
+        required: false
+        type: string
+      sign:
+        description: Sign and notarize the build (requires Apple secrets)
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    # macos-14 and later run on Apple Silicon, which is what the arm64 kernel targets.
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      # Keeps electron-builder from picking up an unrelated login keychain identity.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --fetch-retries=5 --fetch-retry-maxtimeout=120000
+
+      - name: Stage Prism fingerprint kernel
+        env:
+          KERNEL_ARCHIVE_URL: ${{ inputs.kernel_archive_url }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${KERNEL_ARCHIVE_URL:-}" ]]; then
+            archive="$RUNNER_TEMP/prism-kernel.dmg"
+            curl -fL --retry 5 --retry-delay 5 -o "$archive" "$KERNEL_ARCHIVE_URL"
+            node tools/prepare-bundled-kernel.mjs --platform macos-arm64 --archive "$archive"
+          else
+            npm run kernel:prepare-bundled -- --platform macos-arm64
+          fi
+
+      - name: Stage darwin Xray core
+        run: npm run kernel:prepare-v2ray -- --platform darwin-arm64
+
+      - name: Compile (typecheck + electron-vite build)
+        run: npm run build
+
+      - name: Resolve signing mode
+        id: signing
+        env:
+          SIGN_INPUT: ${{ inputs.sign }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          set -euo pipefail
+          if [[ "$SIGN_INPUT" == "true" && -n "${CSC_LINK:-}" ]]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package macOS app (unsigned)
+        if: steps.signing.outputs.signed != 'true'
+        # CSC_IDENTITY_AUTO_DISCOVERY=false (job env) makes electron-builder skip
+        # code signing, which is what produces an unsigned test build here.
+        run: npx electron-builder --mac dmg zip --arm64
+
+      - name: Package macOS app (signed + notarized)
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac dmg zip --arm64 -c.mac.notarize=true
+
+      - name: List artifacts
+        run: ls -la release
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prism-macos-arm64
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14

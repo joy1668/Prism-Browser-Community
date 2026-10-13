@@ -31,6 +31,7 @@
     "analyze:soak": "node tools/runtime-soak/analyze.cjs",
     "kernel:verify-lock": "node tools/kernel-maintenance/run.mjs verify-lock",
     "kernel:prepare-bundled": "node tools/prepare-bundled-kernel.mjs",
+    "kernel:prepare-v2ray": "node tools/prepare-bundled-v2ray.mjs",
     "kernel:probe-upstream": "node tools/kernel-maintenance/run.mjs probe-upstream --output release/kernel-upstream.json",
     "kernel:export-kits": "node tools/kernel-maintenance/run.mjs export-kits --kits-output release/kernel-build-kits",
     "release:update-manifest": "node tools/release/create-update-manifest.mjs",
