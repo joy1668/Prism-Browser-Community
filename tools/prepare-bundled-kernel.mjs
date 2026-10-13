@@ -217,7 +217,14 @@ async function main() {
     await mkdir(extracted, { recursive: true })
     await extract(archive, extracted)
 
-    const buildRoot = await findBuildRoot(extracted)
+    // The macOS archive is a DMG whose single top-level entry is the .app
+    // bundle, and `spec.executable` already includes the `Chromium.app/…`
+    // prefix. Descending into that entry would double the prefix and lose the
+    // entry file, so the extracted directory itself is the build root there.
+    // Windows archives wrap the build in one directory, which is that root.
+    const buildRoot = spec.executable.endsWith('.exe')
+      ? await findBuildRoot(extracted)
+      : extracted
     const executableRelative = spec.executable
 
     // Verify the build actually carries the switches the app passes at launch.
