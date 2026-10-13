@@ -57,6 +57,17 @@ const KERNELS = {
     sha256: '507e191852c1439c42cb67a0fec99cf72a6fabb718cecb623b20bc7bf8da86d3',
     executable: 'Chromium.app/Contents/MacOS/Chromium',
     target: 'darwin-arm64'
+  },
+  // No Intel (x64) macOS kernel is published upstream, so this entry pins no
+  // release: it only accepts a locally supplied archive via --archive, and the
+  // digest check is skipped because there is no upstream digest to compare to.
+  'macos-x64': {
+    version: '153.0.8010.53',
+    tag: '',
+    asset: 'Prism-Kernel-darwin-x64.dmg',
+    sha256: '',
+    executable: 'Chromium.app/Contents/MacOS/Chromium',
+    target: 'darwin-x64'
   }
 }
 
@@ -203,15 +214,22 @@ async function main() {
   try {
     let archive = localArchive
     if (!archive) {
+      if (!spec.tag) {
+        throw new Error(`平台 ${platformKey} 没有可下载的内核发布，请用 --archive 指定本地内核压缩包`)
+      }
       archive = join(staging, spec.asset)
       await download(spec, archive)
     }
 
     const actual = await sha256Of(archive)
-    if (actual !== spec.sha256) {
-      throw new Error(`内核校验失败：期望 ${spec.sha256}，实际 ${actual}`)
+    if (spec.sha256) {
+      if (actual !== spec.sha256) {
+        throw new Error(`内核校验失败：期望 ${spec.sha256}，实际 ${actual}`)
+      }
+      process.stdout.write(`校验通过：${spec.asset}\n`)
+    } else {
+      process.stdout.write(`未固定摘要，跳过校验：${spec.asset}（sha256 ${actual.slice(0, 16)}…）\n`)
     }
-    process.stdout.write(`校验通过：${spec.asset}\n`)
 
     const extracted = join(staging, 'extracted')
     await mkdir(extracted, { recursive: true })

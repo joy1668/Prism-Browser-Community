@@ -1,21 +1,24 @@
 name: Build macOS
 
-# Produces a macOS Apple Silicon desktop build (DMG + ZIP).
+# Produces a macOS Intel (x64) desktop build (DMG + ZIP).
 #
 # The repository ships no CI, so this workflow stages everything a macOS
-# package needs: the Prism fingerprint Chromium kernel, the darwin Xray core,
-# and the Electron bundle. It can run unsigned (for testing) or signed and
-# notarized (when the Apple secrets are configured).
+# package needs: optionally the Prism fingerprint Chromium kernel, the darwin
+# Xray core, and the Electron bundle. It can run unsigned (for testing) or
+# signed and notarized (when the Apple secrets are configured).
 #
-# Note: the pinned kernel release lives under the upstream `DFarm6` repository,
-# while this fork is `joy1668`. If the default download 404s, pass a
-# `kernel_archive_url` pointing at a reachable copy of the Prism kernel DMG.
+# Kernel note: upstream publishes no Intel (x64) macOS kernel — only
+# `kernels-macos-arm64-*`. The package is therefore built without a bundled
+# kernel by default, and users import a kernel from the app's Browser Kernels
+# page. Pass `kernel_archive_url` to bundle a specific Intel kernel archive.
+# Because no upstream digest exists for an x64 kernel, that path skips the
+# pinned-digest check (the app still verifies the kernel at runtime).
 
 on:
   workflow_dispatch:
     inputs:
       kernel_archive_url:
-        description: Optional URL of a Prism macOS kernel DMG (overrides the pinned release)
+        description: Optional URL of a Prism Intel (x64) kernel DMG to bundle
         required: false
         type: string
       sign:
@@ -32,7 +35,7 @@ permissions:
 
 jobs:
   build-macos:
-    # macos-14 and later run on Apple Silicon, which is what the arm64 kernel targets.
+    # macos-14 and later run on Apple Silicon but can cross-build x64 binaries.
     runs-on: macos-14
     timeout-minutes: 90
     env:
@@ -51,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-maxtimeout=120000
 
-      - name: Stage Prism fingerprint kernel
+      - name: Stage Prism fingerprint kernel (optional)
         env:
           KERNEL_ARCHIVE_URL: ${{ inputs.kernel_archive_url }}
         run: |
@@ -59,13 +62,14 @@ jobs:
           if [[ -n "${KERNEL_ARCHIVE_URL:-}" ]]; then
             archive="$RUNNER_TEMP/prism-kernel.dmg"
             curl -fL --retry 5 --retry-delay 5 -o "$archive" "$KERNEL_ARCHIVE_URL"
-            node tools/prepare-bundled-kernel.mjs --platform macos-arm64 --archive "$archive"
+            node tools/prepare-bundled-kernel.mjs --platform macos-x64 --archive "$archive"
           else
-            npm run kernel:prepare-bundled -- --platform macos-arm64
+            echo "No kernel archive provided; building without a bundled kernel."
+            rm -rf build/kernels/current
           fi
 
       - name: Stage darwin Xray core
-        run: npm run kernel:prepare-v2ray -- --platform darwin-arm64
+        run: npm run kernel:prepare-v2ray -- --platform darwin-x64
 
       - name: Compile (typecheck + electron-vite build)
         run: npm run build
@@ -87,7 +91,7 @@ jobs:
         if: steps.signing.outputs.signed != 'true'
         # CSC_IDENTITY_AUTO_DISCOVERY=false (job env) makes electron-builder skip
         # code signing, which is what produces an unsigned test build here.
-        run: npx electron-builder --mac dmg zip --arm64
+        run: npx electron-builder --mac dmg zip --x64
 
       - name: Package macOS app (signed + notarized)
         if: steps.signing.outputs.signed == 'true'
@@ -97,7 +101,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac dmg zip --arm64 -c.mac.notarize=true
+        run: npx electron-builder --mac dmg zip --x64 -c.mac.notarize=true
 
       - name: List artifacts
         run: ls -la release
@@ -105,7 +109,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: prism-macos-arm64
+          name: prism-macos-x64
           path: |
             release/*.dmg
             release/*.zip
